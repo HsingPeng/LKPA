@@ -31,6 +31,7 @@ ENTRY(sys_call_table)
 ```
 
 &emsp;&emsp;在新的版本中，系统调用号也定义在syscall_table_32.S。
+第一列的数字就是系统调用号，第二列是系统调用名称，第三列是对应的系统调用服务函数名称。
 ```c
 # The format is:
 # <number> <abi> <name> <entry point> <compat entry point>
@@ -42,7 +43,6 @@ ENTRY(sys_call_table)
 2	i386	fork			sys_fork			stub32_fork
 3	i386	read			sys_read
 ```
-第一列的数字就是系统调用号，第二列是系统调用名称，第三列是对应的系统调用服务函数名称。
 
 ### 6.2.3 系统调用服务例程和系统调用处理程序
 

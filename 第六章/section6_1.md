@@ -24,7 +24,7 @@ strace ls或strace hostname，就会发现它们调用了诸如open、brk、fsta
 
 &emsp;&emsp;内核函数与普通函数形式上没有什么区别，只不过前者在内核实现，因此要满足一些内核编程的要求[^1]。系统调用是用户进程进入内核的接口层，它本身并非内核函数，但它是由内核函数实现的，进入内核后，不同的系统调用会找到各自对应的内核函数，这些内核函数被称为系统调用的**“服务例程”**。比如系统调用
 getpid实际调用的服务例程为sys_getpid()，或者说系统调用getpid()是服务例程sys_getpid()的“**封装例程”**。
-但是内核代码里没有名为sys_getpid()的函数，而是由SYSCALL_DEFINE0宏定义的，下面是sys_getpid()在内核的具体实现，代码位置kernel/sys.c：
+&emsp;&emsp;但是内核代码里没有名为sys_getpid()的函数，而是由SYSCALL_DEFINE0宏定义的，下面是sys_getpid()在内核的具体实现，代码位置kernel/sys.c：
 
 [^1]: 内核编程相比用户编程有一些特点，简单地讲内核程序一般不能引用C库函数；缺少内存保护措施；堆栈有限（因此调用嵌套不能过多）；而且由于调度关系，必须考虑内核执行路径的连续性，不能有长睡眠等行为。
 
@@ -34,7 +34,7 @@ SYSCALL_DEFINE0(getpid)
 	return task_tgid_vnr(current);
 }
 ```
-SYSCALL_DEFINE0宏的作用是生成没有参数的系统调用函数，我们将在6.4章节说明SYSCALL_DEFINEx系列宏的作用。
+&emsp;&emsp;SYSCALL_DEFINE0宏的作用是生成没有参数的系统调用函数，我们将在6.4章节说明SYSCALL_DEFINEx系列宏的作用。
 SYSCALL_DEFINE0实现如下，代码位置include/linux/syscalls.h：
 ```c
 #define SYSCALL_DEFINE0(sname)					\

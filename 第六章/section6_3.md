@@ -43,7 +43,7 @@ DPL（描述符特权级）：置为3。这就允许用户态进程调用这个�
 ### 6.3.2 system_call( )函数
 
 &emsp;&emsp;system_call( )函数实现了系统调用处理程序，在文件arch/x86/kernel/entry_32.S中。它首先把系统调用号和这个异常处理程序可以用到的所有CPU寄存器保存到相应的栈中，当然，栈中还有CPU已自动保存的eflags、cs、eip、ss和esp寄存器（参见第五章“异常的硬件处理”一节），也在ds和es中装入内核数据段的段选择子：
-```c
+```
 ENTRY(system_call)
     RING0_INT_FRAME            # can't unwind into user space anyway
     ASM_CLAC
@@ -55,7 +55,7 @@ ENTRY(system_call)
     jnz syscall_trace_entry
 ```
 &emsp;&emsp;GET_THREAD_INFO()宏把当前进程PCB的地址存放在ebp中；这是通过获得内核栈指针的值并把它取整到8KB的倍数而完成的（参见第三章“3．2．4进程控制块的存放”一节），此宏定义在arch/x86/include/asm/thread_info.h中。然后，对用户态进程传递来的系统调用号进行有效性检查。如果这个号大于或等于NR_syscalls，系统调用处理程序终止：
-```c
+```
     cmpl $(nr_syscalls), %eax
     jae syscall_badsys
 ```
@@ -65,14 +65,14 @@ ENTRY(system_call)
 eax寄存器中既存放系统调用号，也存放系统调用的返回值，前者是一个正数，后者是一个负数。
 
 &emsp;&emsp;最后， 根据eax中所包含的系统调用号调用对应的特定服务例程：
-```c
+```
 syscall_call:
     call *sys_call_table(,%eax,4)
 ```
 &emsp;&emsp;因为系统调用表中的每一表项占4个字节，因此首先把eax中的系统调用号乘以4再加上sys_call_table系统调用表的起始地址，然后从这个地址单元获取指向相应服务例程的指针，内核就找到了要调用的服务例程。
 
 &emsp;&emsp;当服务例程执行结束时，system_call( )从eax获得它的返回值，并把这个返回值存放在栈中，让其位于用户态eax寄存器曾存放的位置。然后执行syscall_exit代码段，终止系统调用处理程序的执行（参见“5.4.6从中断返回”一节）。
-```c
+```
     movl %eax,PT_EAX(%esp)		# store the return value
 syscall_exit:
 ...

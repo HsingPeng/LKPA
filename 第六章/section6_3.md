@@ -1,6 +1,10 @@
 ## 6.3 系统调用实现
 
-&emsp;&emsp;当用户态的进程调用一个系统调用时，CPU从内核态切换到内核态并开始执行一个内核函数。Linux对系统调用的调用必须通过执行int$0x80汇编指令，这条汇编指令产生向量为128的编程异常（参见5.1.3异常及非屏蔽中断）。
+&emsp;&emsp;当用户态的进程调用一个系统调用时，CPU从内核态切换到内核态并开始执行一个内核函数。在x86平台上，Linux有两种系统调用方式：基于int $0x80的方式和基于sysenter的方式。在x86_64平台上使用基于syscall的方式。
+Intel x86 CPU 从 PII 300之后，开始支持新的系统调用指令sysenter/sysexit。Linux内核从2.5版本开始支持sysenter/sysexit指令的系统调用方式。
+考虑到sysenter的支持范围较小，这里主要介绍x86平台基于int $0x80的方式。
+
+&emsp;&emsp;Linux对系统调用的调用必须通过执行int $0x80汇编指令，这条汇编指令产生向量为128的编程异常（参见5.1.3异常及非屏蔽中断）。
 
 &emsp;&emsp;因为内核实现了很多不同的系统调用，因此进程必须传递一个系统调用号的参数来识别所需的系统调用；eax寄存器就用做此目的。我们将在本章的“参数传递”一节看到，当调用一个系统调用时通常还要传递另外的参数。
 
@@ -24,7 +28,7 @@
 
 &emsp;&emsp;内核初始化期间调用trap_init( )函数建立IDT表中128号向量对应的表项，语句如下：
 ```c
-set_system_gate(SYSCALL_VECTOR, &system_call);
+set_system_trap_gate(SYSCALL_VECTOR, &system_call);
 ```
 &emsp;&emsp;其中SYSCALL_VECTOR是一个宏定义，其值为0x80，该调用把下列值装入这个门描述符的相应域（参见第五章“5.2中断描述符表的初始化”一节）：
 
@@ -38,21 +42,22 @@ DPL（描述符特权级）：置为3。这就允许用户态进程调用这个�
 
 ### 6.3.2 system_call( )函数
 
-&emsp;&emsp;system_call( )函数实现了系统调用处理程序。它首先把系统调用号和这个异常处理程序可以用到的所有CPU寄存器保存到相应的栈中，当然，栈中还有CPU已自动保存的eflags、cs、eip、ss和esp寄存器（参见第五章“异常的硬件处理”一节），也在ds和es中装入内核数据段的段选择子：
+&emsp;&emsp;system_call( )函数实现了系统调用处理程序，在文件arch/x86/kernel/entry_32.S中。它首先把系统调用号和这个异常处理程序可以用到的所有CPU寄存器保存到相应的栈中，当然，栈中还有CPU已自动保存的eflags、cs、eip、ss和esp寄存器（参见第五章“异常的硬件处理”一节），也在ds和es中装入内核数据段的段选择子：
 ```c
 ENTRY(system_call)
-
-pushl %eax
-
-SAVE_ALL
-
-GET_THREAD_INFO(%ebp)
+    RING0_INT_FRAME            # can't unwind into user space anyway
+    ASM_CLAC
+    pushl_cfi %eax            # save orig_eax
+    SAVE_ALL
+    GET_THREAD_INFO(%ebp)
+                    # system call tracing in operation / emulation
+    testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags(%ebp)
+    jnz syscall_trace_entry
 ```
 &emsp;&emsp;GET_THREAD_INFO()宏把当前进程PCB的地址存放在ebp中；这是通过获得内核栈指针的值并把它取整到8KB的倍数而完成的（参见第三章“3．2．4进程控制块的存放”一节），此宏定义在arch/x86/include/asm/thread_info.h中。然后，对用户态进程传递来的系统调用号进行有效性检查。如果这个号大于或等于NR_syscalls，系统调用处理程序终止：
 ```c
-cmpl $(nr_syscalls), %eax
-
-jae syscall_badsys
+    cmpl $(nr_syscalls), %eax
+    jae syscall_badsys
 ```
 &emsp;&emsp;如果系统调用号无效，跳转到syscall_badsys处执行，此时就把-ENOSYS值存放在栈中eax[^2]寄存器所在的单元（从当前栈顶开始偏移为24的单元）。然后跳到resume_userspace反回到用户空间。当进程以这种方式恢复它在用户态的执行时，会在eax中发现一个负的返回码。
 
@@ -61,16 +66,15 @@ eax寄存器中既存放系统调用号，也存放系统调用的返回值，�
 
 &emsp;&emsp;最后， 根据eax中所包含的系统调用号调用对应的特定服务例程：
 ```c
-call *sys_call_table(0， %eax， 4)
+syscall_call:
+    call *sys_call_table(,%eax,4)
 ```
 &emsp;&emsp;因为系统调用表中的每一表项占4个字节，因此首先把eax中的系统调用号乘以4再加上sys_call_table系统调用表的起始地址，然后从这个地址单元获取指向相应服务例程的指针，内核就找到了要调用的服务例程。
 
 &emsp;&emsp;当服务例程执行结束时，system_call( )从eax获得它的返回值，并把这个返回值存放在栈中，让其位于用户态eax寄存器曾存放的位置。然后执行syscall_exit代码段，终止系统调用处理程序的执行（参见“5.4.6从中断返回”一节）。
 ```c
-movl %eax， 24(%esp)
-
+    movl %eax,PT_EAX(%esp)		# store the return value
 syscall_exit:
-
 ...
 ```
 &emsp;&emsp;当进程恢复它在用户态的执行时，就可以在eax中找到系统调用的返回码。
@@ -98,18 +102,17 @@ syscall_exit:
 &emsp;&emsp;存放系统调用参数所用的6个寄存器以递增的顺序为：eax (存放系统调用号)、
 ebx、ecx、edx、esi及edi。正如前面看到的那样，system_call()使用SAVE_ALL宏把这些寄存器的值保存在内核态堆栈中。因此，当系统调用服务例程转到内核态堆栈时，就会找到system_call()的返回地址、紧接着是存放在eax中的参数（即系统调用的第一个参数）、存放在ecx中的参数等等。这种栈结构与普通函数调用的栈结构完全相同，因此，服务例程可以很容易地使用一般C语言构造的参数。
 
-&emsp;&emsp;让我们来看一个例子。处理write( )系统调用的sys_write( )服务例程的声明如下：
+&emsp;&emsp;让我们来看一个例子。处理write( )系统调用的sys_write( )服务例程的声明如下，位于文件fs/read_write.c：
 ```c
-int sys_write (unsigned int fd， const char * buf，unsigned int count)
+SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
+		size_t, count)
 ```
 &emsp;&emsp;C编译器产生一个汇编语言函数，该函数可以在栈顶找到fd、buf和count参数，因为这些参数就位于返回地址的下面。
 
-&emsp;&emsp;在少数情况下，系统调用不使用任何参数，但是相应的服务例程也需要知道在发出系统调用之前CPU寄存器的内容。例如，
-系统调用fork( )没有参数，但其服务例程do_fork()需要知道有关寄存器的值，以便在子进程中使用它们。在这种情况下，一个类型为pt_regs的单独参数允许服务例程访问由SAVE_ALL宏保存在内核态堆栈中的值：
+&emsp;&emsp;在少数情况下，系统调用不使用任何参数，例如：
 ```c
-int sys_fork (struct pt_regs regs)
+SYSCALL_DEFINE0(fork)
 ```
-&emsp;&emsp;服务例程的返回值必须写到eax寄存器中，这是在执行return n指令时由C编译程序自动完成的。
 
 ### 6.3.4 跟踪系统调用的执行
 
@@ -119,23 +122,14 @@ int sys_fork (struct pt_regs regs)
 
 ```c
 #include<syscall.h>
-
 #include<unistd.h>
-
 #include<stdio.h>
-
 #include<sys/types.h>
-
 int main(void) {
-
-long ID;
-
-ID = getpid();
-
-printf ("getpid()=%ld\n", ID);
-
-return(0);
-
+  long ID;
+  ID = getpid();
+  printf ("getpid()=%ld\n", ID);
+  return(0);
 }
 ```
 

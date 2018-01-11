@@ -23,58 +23,44 @@ strace ls或strace hostname，就会发现它们调用了诸如open、brk、fsta
 ### 6.1.3 系统调用与内核函数
 
 &emsp;&emsp;内核函数与普通函数形式上没有什么区别，只不过前者在内核实现，因此要满足一些内核编程的要求[^1]。系统调用是用户进程进入内核的接口层，它本身并非内核函数，但它是由内核函数实现的，进入内核后，不同的系统调用会找到各自对应的内核函数，这些内核函数被称为系统调用的**“服务例程”**。比如系统调用
-getpid实际调用的服务例程为sys_getpid()，或者说系统调用getpid()是服务例程sys_getpid()的“**封装例程”**。下面是sys_getpid()在内核的具体实现：
+getpid实际调用的服务例程为sys_getpid()，或者说系统调用getpid()是服务例程sys_getpid()的“**封装例程”**。
+但是内核代码里没有名为sys_getpid()的函数，而是由SYSCALL_DEFINE0宏定义的，下面是sys_getpid()在内核的具体实现，代码位置kernel/sys.c：
 
 [^1]: 内核编程相比用户编程有一些特点，简单地讲内核程序一般不能引用C库函数；缺少内存保护措施；堆栈有限（因此调用嵌套不能过多）；而且由于调度关系，必须考虑内核执行路径的连续性，不能有长睡眠等行为。
 
 ```c
-asmlinkage long sys_getpid(void)
-
+SYSCALL_DEFINE0(getpid)
 {
-
-		return current->pid;
-
+	return task_tgid_vnr(current);
 }
 ```
-
+SYSCALL_DEFINE0宏的作用是生成没有参数的系统调用函数，我们将在6.4章节说明SYSCALL_DEFINEx系列宏的作用。
+SYSCALL_DEFINE0实现如下，代码位置include/linux/syscalls.h：
+```c
+#define SYSCALL_DEFINE0(sname)					\
+	SYSCALL_METADATA(_##sname, 0);				\
+	asmlinkage long sys_##sname(void)
+```
 &emsp;&emsp;如果想直接调用服务例程，Linux提供了一个syscall()函数，下面我们举例来对比一下调用系统调用和直接调用内核函数的区别。
 
 ```c
 #include<syscall.h>
-
 #include<unistd.h>
-
 #include<stdio.h>
-
 #include<sys/types.h>
-
 int main(void)
-
 {
-
 		long ID1, ID2;
-
 		/*-----------------------------*/
-
 		/* 直接调用内核函数*/
-
 		/*-----------------------------*/
-
 		ID1 = syscall(SYS_getpid);
-
 		printf ("syscall(SYS_getpid)=%ld\n", ID1);
-
 		/*-----------------------------*/
-
 		/* 调用系统调用 */
-
 		/*-----------------------------*/
-
 		ID2 = getpid();
-
 		printf ("getpid()=%ld\n", ID2);
-
 		return(0);
-
 }
 ```

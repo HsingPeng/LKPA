@@ -5,7 +5,6 @@
 ### 6.2.1 系统调用号
 
 &emsp;&emsp;Linux系统有几百个系统调用，为了唯一的标识每一个系统调用，Linux为每一个系统调用定义了一个唯一的编号，此编号称为系统调用号。
-
 在以前的版本中，它定义在文件linux/arch/x86/include/asm/unistd_32.h中：
 ```c
 #define __NR_restart_syscall 0

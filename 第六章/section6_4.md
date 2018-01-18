@@ -14,7 +14,7 @@ SYSCALL_DEFINE0(fork)
 SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 		size_t, count)
 ```
-&emsp;&emsp;可以把SYSCALL_DEFINE3()这个宏展开成如下的汇编语言代码:
+&emsp;&emsp;可以把_syscall3（）这个宏展开成如下的汇编语言代码:
 ```c
 write:
 

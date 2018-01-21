@@ -15,11 +15,12 @@
 ### 6.6.1 代码结构体系介绍
 
 &emsp;&emsp;上面介绍的基本功能对应程序代码中的三个子程序，它们分别是模块中的两个例程
-syscall_audit()和mod_sys_audit()以及用户态程序auditd()，以下代码基于2.6.28内核。
+syscall_audit()和mod_sys_audit()以及用户态程序auditd()，其中syscall_audit()和mod_sys_audit()编写在同一个模块中.
+以下代码基于x86_64架构，3.10.0版本内核。
 
 #### 1 日志记录例程syscall_audit()
 
-&emsp;&emsp;syscall_audit()是一个内核态的服务例程，该例程负责记录系统调用的运行日志，包括调用时刻、调用者PID、程序名等，这些信息可从内核代码的全局变量xtime或current等处获得。实际中，并不是对每一个系统调用信息都进行收集，只需要对系统影响较大的系统调用，比如fork(),clone(),open()等进行收集即可。
+&emsp;&emsp;syscall_audit()是一个内核态的服务例程，该例程负责记录系统调用的运行日志，包括调用时刻、调用者PID、程序名等，这些信息可从内核函数current_kernel_time()、current_uid()等获得。实际中，并不是对每一个系统调用信息都进行收集，只需要对系统影响较大的系统调用，比如fork(),clone(),open()等进行收集即可。
 
 &emsp;&emsp;为了保证数据连续性，防止丢失，syscall_audit()建立了一个内核缓冲区存放每刻搜集到的日志数据。当搜集的数据量到达一定阀值时（比如到达缓冲区总大小的%80时），就唤醒系统调用所在进程取回数据。否则继续搜集，这时该例程会堵塞在一个等待队列上，直到被唤醒。
 
@@ -28,83 +29,50 @@ syscall_audit()和mod_sys_audit()以及用户态程序auditd()，以下代码基
 ```c
 #define COMM_SIZE 16
 
-struct syscall_buf { /*定义缓冲区*/
-
-		u32 serial; /* 序列号 */
-
-		u32 ts_sec; /*秒 */
-
-		u32 ts_micro; /* 微秒 */
-
-		u32 syscall; /* 系统调用号 */
-
-		u32 status; /* 系统调用的状态 */
-
-		pid_t pid; /* 进程标识符 */
-
-		uid_t uid; /* 用户标识符 */
-
-		u8 comm[COMM_SIZE]; /* 进程对应的程序名 */
-
+struct syscall_buf {	/*定义缓冲区*/
+    u32 serial;		/* 序列号 */
+    u32 ts_sec;		/*秒 */
+    u32 ts_nsec;	/* 纳秒 */
+    u32 syscall;	/* 系统调用号 */
+    u32 status;		/* 系统调用的状态 */
+    pid_t pid;		/* 进程标识符 */
+    uid_t uid;		/* 用户标识符 */
+    u8 comm[COMM_SIZE];	/* 进程对应的程序名 */
 };
+DECLARE_WAIT_QUEUE_HEAD(buffer_wait);	/*申明并初始化等待队列buffer_wait*/
 
-DECLARE_WAIT_QUEUE_HEAD(buffer_wait); /*申明并初始化等待队列buffer_wait
-*/
-
-#define AUDIT_BUF_SIZE 100 /*缓冲区大小 */
-
-static struct syscall_buf audit_buf[AUDIT_BUF_SIZE]; /*缓冲区变量audit_buf
-*/
-
-static int current_pos = 0; /*缓冲区中的位置 */
-
-static u32 serial = 0; /*序列号*/
+#define AUDIT_BUF_SIZE 100		/*缓冲区大小 */
+static struct syscall_buf audit_buf[AUDIT_BUF_SIZE];	/*缓冲区变量audit_buf*/
+static int current_pos = 0;		/*缓冲区中的位置 */
+static u32 serial = 0;			/*序列号*/
 ```
 
 代码如下：
 
 ```c
-void syscall_audit(int syscall,int return_status)
-
+void syscall_audit(int syscall, int return_status)
 {
+    struct syscall_buf * ppb_temp;
 
-		struct syscall_buf *ppb_temp;
+    if(current_pos < AUDIT_BUF_SIZE) {
+    	//以下代码是记录系统调用相关信息
+        struct timespec xtime = current_kernel_time();
+        ppb_temp = &audit_buf[current_pos];
+        ppb_temp->serial = serial++;
+        ppb_temp->ts_sec = xtime.tv_sec;
+        ppb_temp->ts_nsec = xtime.tv_nsec;
+        ppb_temp->syscall = syscall;
+        ppb_temp->status = return_status;
+        ppb_temp->pid = current->pid;
+        ppb_temp->uid = current_uid().val;
 
-		if(current_pos < AUDIT_BUF_SIZE) {
+        memcpy(ppb_temp->comm, current->comm, COMM_SIZE);
 
-				ppb_temp = &audit_buf[current_pos];
-
-				//以下代码是记录系统调用相关信息
-
-				ppb_temp->serial = serial++;
-
-				ppb_temp->ts_sec = xtime.tv_sec;
-
-				ppb_temp->ts_micro = xtime.tv_usec;
-
-				ppb_temp->syscall = syscall;
-
-				ppb_temp->status=return_status;
-
-				ppb_temp->pid = current->pid;
-
-				ppb_temp->uid = current->uid;
-
-				ppb_temp->euid = current->euid;
-
-				memcpy(ppb_temp->comm, current->comm, COMM_SIZE);
-
-				if (++current_pos == AUDIT_BUF_SIZE*8/10)
-
-				{
-
-						printk("IN MODULE_audit:yes, it near full\n ");
-
-						wake_up_interruptible(&buffer_wait); /*唤醒在等待队列上等待的进程*/
-
-				}
-
-		}
+        if(current_pos++ == AUDIT_BUF_SIZE*8/10) {
+            printk("IN MODULE_audit:yes, it near full\n");
+            wake_up_interruptible(&buffer_wait);	/*唤醒在等待队列上等待的进程*/
+        }
+    }
 }
 ```
 
@@ -114,47 +82,24 @@ void syscall_audit(int syscall,int return_status)
 
 ```c
 int sys_audit(u8 type, u8 * us_buf, u16 us_buf_size, u8 reset)
-
 {
-
-		int ret = 0;
-
-		if (!type) {
-
-				if (__clear_user(us_buf, us_buf_size)) { / *清用户态缓冲区*/
-
-						printk("Error:clear_usern");
-
-						return 0;
-
-				}
-
-				printk("IN MODULE_systemcall:starting...\n");
-
-				ret = wait_event_interruptible(buffer_wait,
-
-				current_pos >= AUDIT_BUF_SIZE*8/10);
-
-				printk("IN MODULE_systemcall:over,current_pos is %dn", current_pos);
-
-				if(__copy_to_user(us_buf, audit_buf,
-
-		(current_pos)*sizeof(struct syscall_buf))) { /*将日志拷贝到用户空间*/
-
-						printk("Error:copy error\n");
-
-						return 0;
-
-				}
-
-				ret = current_pos;
-
-				current_pos = 0; /*清空缓冲区*/
-
-		}
-
-		return ret;
-
+    int ret = 0;
+    if(!type) {
+        if(__clear_user(us_buf, us_buf_size)) {	/ *清用户态缓冲区*/
+            printk("Eror:claer_user\n");
+            return 0;
+        }
+        printk("IN MOUDLE_systemcall:starting...\n");
+        ret = wait_event_interruptible(buffer_wait, current_pos >= AUDIT_BUF_SIZE*8/10);
+        printk("IN MOUDLE_systemcall:over, current_pos is %d\n", current_pos);
+        if(__copy_to_user(us_buf, audit_buf, (current_pos)*sizeof(struct syscall_buf))) {	/*将日志拷贝到用户空间*/
+            printk("Error:copy error\n");
+            return 0;
+        }
+        ret = current_pos - 1;
+        current_pos = 0;	/*清空缓冲区*/
+    }
+    return ret;
 }
 ```
 
@@ -164,26 +109,18 @@ int sys_audit(u8 type, u8 * us_buf, u16 us_buf_size, u8 reset)
 
 &emsp;&emsp;为了在模块中能对syscall_audit()和sys_audit()函数动态加载和卸载，我们又定义了与这两个函数对应的钩子函数my_audit（）和my_sysaudit（）；它们的定义在另一个文件中（参见6.6.2节），于是在模块中，申明它们为外部函数。
 ```c
-extern void (*my_audit)(int ,int );
-
-extern int (*my_sysaudit)(unsigned char,unsigned char*,unsigned
-short,unsigned char);
+extern void (*my_audit)(int, int);
+extern int (*my_sysaudit)(unsigned char, unsigned char *, unsigned short, unsigned char);
 ```
 &emsp;&emsp;于是，模块的初始化函数如下：
 
 ```c
 static int __init audit_init(void)
-
 {
-
-		my_sysaudit = sys_audit;
-
-		my_audit = syscall_audit;
-
-		printk("Starting System Call Auditing\n");
-
-		return 0;
-
+    my_sysaudit = sys_audit;
+    my_audit = syscall_audit;
+    printk("Starting System Call Auditing\n");
+    return 0;
 }
 ```
 
@@ -191,17 +128,11 @@ static int __init audit_init(void)
 
 ```c
 static void __exit audit_exit(void)
-
 {
-
-		my_audit = NULL;
-
-		my_sysaudit = NULL;
-
-		printk("Exiting System Call Auditing\n");
-
-		return ;
-
+    my_audit = NULL;
+    my_sysaudit = NULL;
+    printk("Exiting System Call Auditing\n");
+    return;
 }
 ```
 

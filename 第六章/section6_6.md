@@ -27,6 +27,16 @@ syscall_audit()和mod_sys_audit()以及用户态程序auditd()，其中syscall_a
 &emsp;&emsp;变量的申明和定义如下
 
 ```c
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/kernel.h>
+#include <linux/types.h>
+#include <linux/time.h>
+#include <linux/cred.h>
+#include <asm/current.h>
+#include <linux/sched.h>
+#include <asm/uaccess.h>
+
 #define COMM_SIZE 16
 
 struct syscall_buf {	/*定义缓冲区*/
@@ -112,7 +122,7 @@ int sys_audit(u8 type, u8 * us_buf, u16 us_buf_size, u8 reset)
 extern void (*my_audit)(int, int);
 extern int (*my_sysaudit)(unsigned char, unsigned char *, unsigned short, unsigned char);
 ```
-&emsp;&emsp;于是，模块的初始化函数如下：
+&emsp;&emsp;于是，模块的初始化和退出函数如下：
 
 ```c
 static int __init audit_init(void)
@@ -122,11 +132,7 @@ static int __init audit_init(void)
     printk("Starting System Call Auditing\n");
     return 0;
 }
-```
 
-&emsp;&emsp;模块的退出函数如下：
-
-```c
 static void __exit audit_exit(void)
 {
     my_audit = NULL;
@@ -134,6 +140,10 @@ static void __exit audit_exit(void)
     printk("Exiting System Call Auditing\n");
     return;
 }
+
+module_init(audit_init);
+module_exit(audit_exit);
+MODULE_LICENSE("GPL");
 ```
 
 #### 4 用户空间收集日志进程auditd 
@@ -141,70 +151,54 @@ static void __exit audit_exit(void)
 &emsp;&emsp;我们需要一个用户空间进程来不断的调用audit()系统调用，取回系统中搜集到的系统调用日志信息。这里要说明的是，连续不断地调用日志序列对于分析入侵或系统行为等才有价值。
 
 ```c
-#include<stdlib.h>
+#include <stdio.h>
+#include <errno.h>
+#include <signal.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
 
-#include<stdio.h>
+typedef unsigned char u8;
+typedef unsigned int u32;
 
-#include<errno.h>
+#define COMM_SIZE 16
 
-#include<signal.h>
-
-#include<unistd.h>
-
-#include<sys/resource.h>
-
-#include<sys/syscall.h>
-
-#include "types.h" /*包含struct syscall_buf的定义*/
+struct syscall_buf {
+    u32 serial;
+    u32 ts_sec;
+    u32 ts_nsec;
+    u32 syscall;
+    u32 status;
+    pid_t pid;
+    uid_t uid;
+    u8 comm[COMM_SIZE];
+};
 
 #define AUDIT_BUF_SIZE 100*sizeof(struct syscall_buf)
 
 int main(int argc, char *argv[])
-
 {
-
-		u8 col_buf[AUDIT_BUF_SIZE];
-
-		unsigned char reset =1;
-
-		int num = 0;
-
-		struct syscall_buf *p;
-
-		while (1) {
-
-				num = syscall(__NR_myaudit, 0, col_buf, AUDIT_BUF_SIZE, reset);
-
-				printf("num:%d\n", num);
-
-				u8 j=0;
-
-				int i;
-
-				p = (struct syscall_buf *)col_buf;
-
-				for (i = 0;i < num;i++) {
-
-						printf("num [%d],serial: %d\t", i, p[i].serial);
-
-						printf("syscall: %d\n", p[i].syscall);
-
-						printf("ts_sec: %d\n", ((struct syscall_buf*)col_buf)[i].ts_sec);
-
-						printf("status: %d\n", ((struct syscall_buf*)col_buf)[i].status);
-
-						printf("pid: %d\n", ((struct syscall_buf*)col_buf)[i].pid);
-
-						printf("uid: %d\n", ((struct syscall_buf*)col_buf)[i].uid);
-
-						printf("comm: %s\n", ((struct syscall_buf*)col_buf)[i].comm);
-
-				}
-
-		}
-
-		return 1;
-
+    u8 col_buf[AUDIT_BUF_SIZE];
+    unsigned char reset = 1;
+    int num = 0;
+    struct syscall_buf *p;
+    while(1) {
+        num = syscall(325, 0, col_buf, AUDIT_BUF_SIZE, reset);
+        printf("num:%d\n",num);
+        u8 j = 0;
+        int i;
+        p = (struct syscall_buf *)col_buf;
+        for(i = 0; i < num; i++) {
+            printf("num[%d], serial:%d\t",i, p[i].serial);
+            printf("syscall:%d\n", p[i].syscall);
+            printf("ts_sec: %d\n", ((struct syscall_buf*)col_buf)[i].ts_sec);
+            printf("status:%d\n", ((struct syscall_buf *)col_buf)[i].status);
+            printf("pid:%d\n", ((struct syscall_buf *)col_buf)[i].pid);
+            printf("uid:%d\n", ((struct syscall_buf *)col_buf)[i].uid);
+            printf("comm:%s\n", ((struct syscall_buf *)col_buf)[i].comm);
+        }
+    }
+    return 1;
 }
 ```
 
@@ -213,6 +207,7 @@ int main(int argc, char *argv[])
 </div>
 
 <center>图6.2 日志收集系统的代码结构</center>
+
 ### 6.6.2 把代码集成到内核中
 
 &emsp;&emsp;除了上面介绍的内容外，还需要一些辅助性的工作，这些工作将帮助我们将上述代码灵活地结成一体，以完成需要的功能。

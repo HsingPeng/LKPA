@@ -212,113 +212,69 @@ int main(int argc, char *argv[])
 
 &emsp;&emsp;除了上面介绍的内容外，还需要一些辅助性的工作，这些工作将帮助我们将上述代码灵活地结成一体，以完成需要的功能。
 
-#### 1. 添加系统调用号
+#### 1. 在系统调用表中添加相应表项
 
-&emsp;&emsp;与6.5节中添加系统调用的步骤一样，首先修改arch/x86/include/asm/unistd_32.h和/usr/include/asm/unistd_32.h文件，如下：
+&emsp;&emsp;arch/x86/syscalls/syscall_64.tbl文件中含有系统调用表，在其中加入新的系统调用如下：
 ```c
-#definle _NR_mysyscall 333
-
-#define __NR_myaudit 334
+320     common  kexec_file_load         sys_kexec_file_load
+323     common  userfaultfd             sys_userfaultfd
+# 以下是新添加的代码
+324     common  mysyscall               sys_syscall_audit
+325     common  myaudit                 sys_myaudit
 ```
-#### 2. 在系统调用表中添加相应表项
 
-&emsp;&emsp;arch/x86/kernel/syscall_table_32.S文件中含有系统调用表，在其中加入新的系统调用如下：
+#### 2. 添加函数声明
+
+&emsp;&emsp;与6.5节中添加系统调用的步骤一样，打开include/linux/syscalls.h文件，添加系统调用处理函数声明，如下：
 ```c
-ENTRY(sys_call_table)
-
-.long sys_restart_syscall /* 0 - old "setup()" system call, used for
-restarting */
-
-.long sys_exit
-
-.long sys_fork
-
-.long sys_read
-
-…
-
-long sys_mysyscall /*333号*/
-
-.long sys_myaudit /*334号*/
+# 在文件最后添加以下代码
+asmlinkage void sys_syscall_audit(int syscall,int return_status);
+asmlinkage int sys_myaudit(u8 type, u8 * us_buf, u16 us_buf_size, u8 reset);
 ```
+
 #### 3. 修改系统调用入口
 
-&emsp;&emsp;在arch/x86/kernel/entry_32.S中含有系统调用入口system_call，因此在该文件中添加如下代码：
+&emsp;&emsp;在arch/x86/kernel/entry_64.S中含有系统调用入口system_call，因此在该文件中添加如下代码：
 ```c
-syscall_call:
-
-call *sys_call_table(,%eax,4)
-
-movl %eax,PT_EAX(%esp) # store the return value
-```
-
-```c
+        ja badsys
+        movq %r10,%rcx
+        call *sys_call_table(,%rax,8)  # XXX:    rip relative
+        movq %rax,RAX-ARGOFFSET(%rsp)
 #以下代码为新添加代码
-
-cmpl $2, 0x28(%esp) # this is fork()
-
-je myauditsys
-
-cmpl $5, 0x28(%esp) # this is open()
-
-je myauditsys
-
-cmpl $6, 0x28(%esp) # this is close()
-
-je myauditsys
-
-cmpl $11, 0x28(%esp) # this is execv()
-
-je myauditsys
-
-cmpl $20, 0x28(%esp) # this is getpid()
-
-je myauditsys
-
-cmpl $120, 0x28(%esp) # this is clone()
-
-je myauditsys
-
+        cmpq $57,ORIG_RAX-ARGOFFSET(%rsp)       #比较调用号是否相等，57是fork的调用号
+        je myauditsys                           #是fork调用则跳转到myauditsys1
+        cmpq $2,ORIG_RAX-ARGOFFSET(%rsp)        #open
+        je myauditsys
+        cmpq $3,ORIG_RAX-ARGOFFSET(%rsp)        #close
+        je myauditsys
+        cmpq $59,ORIG_RAX-ARGOFFSET(%rsp)       #execv
+        je myauditsys
+        cmpq $39,ORIG_RAX-ARGOFFSET(%rsp)       #getpid
+        je myauditsys
+        cmpq $56,ORIG_RAX-ARGOFFSET(%rsp)       #clone
+        je myauditsys
+myaudit:
 #添加代码段结束
 ```
 
 &emsp;&emsp;以上代码保证在每次系统调用后都执行比较，如果系统调用号与我们要收集的系统调用号系统，则将调用myauditsys代码段，如下代码：
 ```c
-syscall_exit:
+        FIXUP_TOP_OF_STACK %r11, -ARGOFFSET
+        jmp int_check_syscall_exit_work
 
-……
-```
-
-```c
 #以下为新添加代码段
-
-jmp restore_all #new add
-
 myauditsys:
-
-pushl %eax # pass in return status
-
-CFI_ADJUST_CFA_OFFSET 4 # help to debug
-
-pushl 0x2C(%esp) # pass in syscall number
-
-CFI_ADJUST_CFA_OFFSET 4
-
-call syscall_audit;
-
-popl %eax # remove orig_eax from stack
-
-popl %eax # remove eax from stack
-
-jmp syscall_exit
-
+    pushq %rax
+    pushq %rdi
+    pushq %rsi
+    movq ORIG_RAX-ARGOFFSET+8*3(%rsp),%rdi
+    movq RAX-ARGOFFSET+8*3(%rsp),%rsi
+    call sys_syscall_audit
+    popq %rsi
+    popq %rdi
+    popq %rax
+    jmp myaudit
 #新添加代码段结束
-```
-
-```c
-restore_all:
-
-movl PT_EFLAGS(%esp), %eax # mix EFLAGS, SS and CS
 ```
 &emsp;&emsp;其中调用了我们编写的日志记录例程syscall_audit()。
 
@@ -327,82 +283,56 @@ movl PT_EFLAGS(%esp), %eax # mix EFLAGS, SS and CS
 &emsp;&emsp;在/arch/x86/kernel/目录下添加自己编写的myaudit.c文件，该文件包含的内容如下：
 
 ```c
-#include<asm/uaccess.h>
+#include <asm/uaccess.h>
+#include <linux/proc_fs.h>
+#include <linux/init.h>
+#include <linux/types.h>
+#include <asm/current.h>
+#include <linux/sched.h>
 
-#include<linux/proc_fs.h>
-
-#include<linux/init.h>
-
-#include<linux/types.h>
-
-#include<asm/current.h>
-
-#include<linux/sched.h>
-
-void (*my_audit)(int, int) = 0;
-
-/* 系统调用日志记录例程 */
-
-asmlinkage void syscall_audit(int syscall,int return_status)
-
+void (* my_audit)(int, int) = 0;
+asmlinkage void sys_syscall_audit(int syscall,int  return_status)
 {
-
-		if(my_audit)
-
-		return (*my_audit)(syscall, return_status);
-
-		printk("IN KERNEL:%s(%d),syscall:%d,return:%d\n",
-
-		current->comm, current->pid, syscall, return_status);
-
-		return ;
-
+    if(my_audit)    //如果钩子函数没有挂在则输出printk信息
+        return (* my_audit)(syscall, return_status);
+    printk("IN KERNEL:%s(%d), syscall:%d, return:%d\n", current->comm,
+                current->pid, syscall, return_status);
+    return;
 }
 
-/* 系统调用 */
-
-int (*my_sysaudit)(u8,u8*,u16,u8)=0;
-
+int (* my_sysaudit)(u8, u8 *, u16, u8) = 0;
 asmlinkage int sys_myaudit(u8 type, u8 * us_buf, u16 us_buf_size, u8 reset)
-
 {
-
-		if(my_sysaudit)
-
-		return (*my_sysaudit)(type,us_buf,us_buf_size,reset);
-
-		printk("IN KERNEL:my system call sys_myaudit() working\n");
-
-		return 1;
-
+    if(my_sysaudit)
+        return (* my_sysaudit)(type, us_buf, us_buf_size, reset);
+    printk("IN KERNEL:my system call sysaudit() working\n");
+    return 0;
 }
-```
 
-&emsp;&emsp;从代码可以看出sycall_audit()和sys_audit()并没有实现而是用两个钩子函数my_audit()和my_sysaudit()作为替身。而这两个钩子函数my_audit()和my_sysaudit()被放在模块中去实现，这样可以动态加载，方便调式。代码的结构如图6.2所示：
+EXPORT_SYMBOL(my_audit);
+EXPORT_SYMBOL(my_sysaudit);
+```
+&emsp;&emsp;末尾两句通过EXPORT_SYMBOL导出刚加入的函数名，以便其他内核函数调用，这两个钩子函数的实现我们放在了模块中。
+
+&emsp;&emsp;从代码可以看出sycall_audit()和sys_audit()并没有实现而是用两个钩子函数my_audit()和my_sysaudit()作为替身。而这两个钩子函数my_audit()和my_sysaudit()被放在模块中去实现，这样可以动态加载，方便调式。代码的结构如图6.2所示。
 
 #### 5. 修改Makefile文件
 
 &emsp;&emsp;修改arch/x86/kernel/Makefile:
 
-&emsp;&emsp;加入 obj-y +=audit.o，即告诉内核将模块audit.o编译进内核
+&emsp;&emsp;加入 obj-y +=myaudit.o，即告诉内核将模块myaudit.o编译进内核
 
-#### 6. 导出函数名，以提供内核接口函数
-
-&emsp;&emsp;修改arch/x86/kernel/i386_ksyms_32.c，在末尾加入：
-```c
-extern void (*my_audit)(int,int);
-
-EXPORT_SYMBOL(my_audit);
-
-extern int(*my_sysaudit)(unsigned char,unsigned char*unsigned short,unsigned
-char);
-
-EXPORT_SYMBOL (my_sysaudit);
-```
-&emsp;&emsp;通过EXPORT_SYMBOL导出刚加入的函数名，以便其他内核函数调用，这两个钩子函数的实现我们放在了模块中。
-
-#### 7. 编译并加载模块
+#### 6. 编译并加载模块
 
 insmod audit.o
 
 #### 8. 重新编译内核
+
+以centos7为例，需要依次执行以下语句：
+```
+make -j8	//根据cpu核心决定线程数量
+make bzImage
+make modules
+sudo make modules_install
+sudo make install
+```

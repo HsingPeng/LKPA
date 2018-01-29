@@ -2,7 +2,7 @@
 
 &emsp;&emsp;当用户态的进程调用一个系统调用时，CPU从内核态切换到内核态并开始执行一个内核函数。在x86平台上，Linux有两种系统调用方式：基于int $0x80的方式和基于sysenter的方式。在x86_64平台上使用基于syscall的方式。
 Intel x86 CPU 从 PII 300之后，开始支持新的系统调用指令sysenter/sysexit。Linux内核从2.5版本开始支持sysenter/sysexit指令的系统调用方式。
-考虑到sysenter的支持范围较小，这里主要介绍x86平台基于int $0x80的方式。
+这里主要介绍x86平台基于int $0x80的方式。
 
 &emsp;&emsp;Linux对系统调用的调用必须通过执行int $0x80汇编指令，这条汇编指令产生向量为128的编程异常（参见5.1.3异常及非屏蔽中断）。
 

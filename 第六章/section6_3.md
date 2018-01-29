@@ -121,20 +121,30 @@ SYSCALL_DEFINE0(fork)
 &emsp;&emsp;假设我们的程序源文件名为getpid.c，程序为：
 
 ```c
-#include<syscall.h>
-#include<unistd.h>
-#include<stdio.h>
-#include<sys/types.h>
-int main(void) {
-  long ID;
-  ID = getpid();
-  printf ("getpid()=%ld\n", ID);
-  return(0);
+int main()
+{
+    long ID;
+    asm volatile(
+    "mov $20, %%eax\n"
+    "int $0x80\n"
+    "mov %%eax, %0\n"
+    :"=m"(ID)
+    );
+    printf("getpid()=%ld\n",ID);
+    return 0;
 }
 ```
 
-&emsp;&emsp;将其编译成名为getpid的执行文件：“gcc –o getpid getpid.c”,我们使用KDB来看进入内核后的执行路径（kdb是个内核调试补丁，使用前需要给内核打上该补丁，然后打开调试选项，再重新编译内核）。首先激活KDB(按下pause键)，设置内核断点 “bp sys_getpid”，退出kdb。然后执行./getpid。瞬间，进入内核调试状态,执行路径停止在断点sys_getpid处。
+&emsp;&emsp;为了使用int 0x80方式进入系统调用，我们直接嵌入汇编代码，并在eax寄存器指定编号为20的系统调用getpid，最后将结果返回ID变量。将其编译成名为getpid的执行文件：“gcc –o getpid getpid.c”,我们使用KDB来看进入内核后的执行路径（kdb是个内核调试补丁，在2.6.35版本被合并进入主分支，在centos7中默认支持，若没有启用，则需要重新编译内核）。首先激活KDB，并设置断点。
+1. 执行：echo kbd > /sys/module/kgdboc/parameters/kgdboc。此时通过dmsg命令可以看到输出：kgdb:Registered I/O driver kgdboc.说明kdb开启成功。
 
+2. 执行：echo g > /proc/sysrq-trigger。这是通过 magic sysrq 触发进入kdb。此时系统可能会变缓慢，输入命令后回车等待即可。
+
+3. 在KDB>提示符下，执行bp sys_getpid，在函数sys_getpid处设置断点。
+
+4. 在KDB>提示符下，执行go，退出kdb。
+
+此时执行./getpid，系统会立即进入kdb调试状态。在执行程序之前，系统可能会多次进入kdb，这是因为系统中的其他程序调用了getpid系统调用造成的。接下来就可以追踪系统调用。
 1.  在KDB>提示符下，执行bt命令观察堆栈，发现调用的嵌套路径，可以看到sys_getpid是在内核函数system_call中被嵌套调用的。
 
 2.  在KDB>提示符下，执行rd命令查看寄存器中的数值，可以看到eax中存放的是getpid调用号0x00000014(即十进制20)。
@@ -143,7 +153,7 @@ int main(void) {
 
 结合用户空间的执行路径，该程序的执行大致可归结为以下几个步骤：
 
-1.  程序调用libc库的封装函数getpid。该封装函数中将系统调用号_NR_getpid（第20个）压入eax寄存器。
+1.  程序将系统调用号20压入eax寄存器。
 
 2.  调用软中断 int 0x80 进入内核。
 
@@ -151,4 +161,4 @@ int main(void) {
 
 4.  执行sys_getpid服务例程。
 
-5.  执行完毕后，转入syscall_exit_work例程，从系统调用返回。</div>
+5.  执行完毕后，转入syscall_exit_work例程，从系统调用返回。

@@ -73,8 +73,8 @@ SYSCALL_DEFINE0(mysyscall)
 int main()
 {
 	printf(“This is my uid:%d.\n”, getuid());
-	long uid = syscall(__NR_mysyscall);
-	printf(“My uid is:%ld.\n”, uid);
+	int uid = syscall(__NR_mysyscall);
+	printf(“My uid is:%d.\n”, uid);
 }
 ```
 

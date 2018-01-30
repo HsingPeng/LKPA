@@ -54,8 +54,7 @@ asmlinkage int sys_mysyscall(void);
 ```c
 SYSCALL_DEFINE0(mysyscall)
 {
-		current->uid=0;
-		return 0;
+		return current->cred->uid.val;
 }
 ```
 如前所述，SYSCALL_DEFINE0用于生成没有参数的系统调用服务例程。
@@ -74,8 +73,8 @@ SYSCALL_DEFINE0(mysyscall)
 int main()
 {
 	printf(“This is my uid:%d.\n”, getuid());
-	syscall(__NR_mysyscall);
-	printf(“Now , my uid is changed:%d.\n”, getuid());
+	long uid = syscall(__NR_mysyscall);
+	printf(“My uid is:%ld.\n”, uid);
 }
 ```
 

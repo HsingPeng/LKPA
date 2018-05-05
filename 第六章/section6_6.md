@@ -324,11 +324,11 @@ EXPORT_SYMBOL(my_sysaudit);
 
 #### 6. 编译并加载模块
 
-insmod audit.o
+&emsp;&emsp;insmod audit.o
 
 #### 8. 重新编译内核
 
-以centos7为例，需要依次执行以下语句：
+&emsp;&emsp;以centos7为例，需要依次执行以下语句：
 ```
 make -j8	//根据cpu核心决定线程数量
 make bzImage
